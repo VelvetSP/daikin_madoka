@@ -18,7 +18,6 @@ from homeassistant.components.climate.const import (
     FAN_HIGH,
     FAN_LOW,
     FAN_MEDIUM,
-    FAN_OFF,
 )
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 
