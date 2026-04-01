@@ -37,6 +37,10 @@ See installation instructions below.
 
 See `esphome_components/README.md` for details.
 
+## Development Workflow
+
+This public repository uses GitHub Actions for CI validation on pushes and pull requests.
+
 ---
 
 ## Home Assistant Integration Installation
@@ -101,3 +105,8 @@ Kudos to [Jose](https://community.home-assistant.io/u/jcsogo) for the solution.
 ## TODO
 This document.
 Icon and integration images.
+
+## Credits
+
+Based on the original work by [@mduran80](https://github.com/mduran80/daikin_madoka).  
+ESPHome madoka component adapted from [Petapton/esphome](https://github.com/Petapton/esphome).
