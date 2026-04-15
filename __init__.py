@@ -22,7 +22,7 @@ from .const import CONTROLLERS, DOMAIN
 PARALLEL_UPDATES = 0
 MIN_TIME_BETWEEN_UPDATES = timedelta(seconds=60)
 
-COMPONENT_TYPES = ["climate"]
+COMPONENT_TYPES = ["climate", "sensor"]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     for component in COMPONENT_TYPES:
         coroutine = hass.config_entries.async_forward_entry_setups(entry, [component])
         hass.async_create_task(coroutine)
-
 
     return True
 
