@@ -19,6 +19,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@Petapton"]
 DEPENDENCIES = ["ble_client"]
+AUTO_LOAD = ["binary_sensor", "button", "number", "sensor", "text_sensor"]
 
 CONF_OUTDOOR_TEMPERATURE = "outdoor_temperature"
 CONF_CLEAN_FILTER = "clean_filter"

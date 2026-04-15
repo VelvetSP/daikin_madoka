@@ -2,6 +2,14 @@
 
 Ce dossier contient les composants ESPHome personnalisés pour contrôler les thermostats Daikin Madoka BRC1H via un proxy Bluetooth ESP32.
 
+## Compatibilité
+
+| ESPHome | Support |
+|---|---|
+| < 2025.10 | Non supporté |
+| 2025.10 – 2026.3 | Compatible (non testé) |
+| 2026.4+ | Testé et validé |
+
 ## Composants inclus
 
 - **madoka** : Composant climate pour contrôler les thermostats Madoka
