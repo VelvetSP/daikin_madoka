@@ -288,5 +288,5 @@ script:
 
 - Intégration HA originale : [@mduran80](https://github.com/mduran80/daikin_madoka) / bibliothèque [pymadoka](https://github.com/IgnacioHR/pymadoka)
 - Composant ESPHome madoka : [Petapton/esphome](https://github.com/Petapton/esphome)
-- Support ESP32-S3 et switch ré-appairage : [@Quev1n](https://forum.hacf.fr)
+- Switch ré-appairage : [@Quev1n](https://forum.hacf.fr)
 - Maintenance, entités additionnelles, compatibilité ESPHome 2026.4 : [dasimon135/daikin_madoka](https://github.com/dasimon135/daikin_madoka)
