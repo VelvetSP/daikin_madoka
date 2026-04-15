@@ -169,18 +169,27 @@ class DaikinMadokaClimate(ClimateEntity):
     async def async_set_temperature(self, **kwargs):
         """Set new target temperature."""
         try:
+            if self.controller.set_point.status is None:
+                return
+            if self.controller.operation_mode.status is None:
+                return
+
+            target_temperature = kwargs.get(ATTR_TEMPERATURE)
+            if target_temperature is None:
+                return
+
             new_cooling_set_point = self.controller.set_point.status.cooling_set_point
-            new_heating_set_point = self.controller.set_point.status.cooling_set_point
+            new_heating_set_point = self.controller.set_point.status.heating_set_point
             if (
                 self.controller.operation_mode.status.operation_mode
                 != OperationModeEnum.HEAT
             ):
-                new_cooling_set_point = round(kwargs.get(ATTR_TEMPERATURE))
+                new_cooling_set_point = round(target_temperature)
             if (
                 self.controller.operation_mode.status.operation_mode
                 != OperationModeEnum.COOL
             ):
-                new_heating_set_point = round(kwargs.get(ATTR_TEMPERATURE))
+                new_heating_set_point = round(target_temperature)
 
             await self.controller.set_point.update(
                 SetPointStatus(new_cooling_set_point, new_heating_set_point)
@@ -201,6 +210,8 @@ class DaikinMadokaClimate(ClimateEntity):
 
         if self.controller.power_state.status is None:
             return None
+        if self.controller.operation_mode.status is None:
+            return None
 
         if self.controller.power_state.status.turn_on is False:
             return HVACMode.OFF
@@ -220,6 +231,8 @@ class DaikinMadokaClimate(ClimateEntity):
 
         if self.controller.power_state.status is None:
             return None
+        if self.controller.operation_mode.status is None:
+            return None
 
         if self.controller.power_state.status.turn_on is False:
             return HVACAction.OFF
@@ -228,6 +241,8 @@ class DaikinMadokaClimate(ClimateEntity):
             self.controller.operation_mode.status.operation_mode
             == OperationModeEnum.AUTO
         ):
+            if self.target_temperature is None or self.current_temperature is None:
+                return None
             # pylint: disable=no-else-return
             if self.target_temperature >= self.current_temperature:
                 return HVACAction.HEATING

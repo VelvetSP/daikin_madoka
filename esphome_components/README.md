@@ -5,7 +5,6 @@ Ce dossier contient les composants ESPHome personnalisés pour contrôler les th
 ## Composants inclus
 
 - **madoka** : Composant climate pour contrôler les thermostats Madoka
-- **ble_client** : Version corrigée du composant ble_client compatible avec ESPHome 2025.10.0+
 
 ## Installation
 
@@ -18,7 +17,7 @@ external_components:
   - source:
       type: local
       path: esphome_components
-    components: [ madoka, ble_client ]
+    components: [ madoka ]
 ```
 
 ### Option 2 : Depuis GitHub
@@ -28,7 +27,7 @@ Si vous hébergez ce repository sur GitHub :
 ```yaml
 external_components:
   - source: github://votre-utilisateur/daikin_madoka
-    components: [ madoka, ble_client ]
+    components: [ madoka ]
 ```
 
 ## Configuration exemple
@@ -51,12 +50,13 @@ api:
     key: votre_clé_ici
 
 ota:
+  - platform: esphome
 
 external_components:
   - source:
       type: local
       path: /config/esphome/esphome_components  # Ajustez le chemin selon votre config
-    components: [ madoka, ble_client ]
+    components: [ madoka ]
 
 esp32_ble_tracker:
   max_connections: 2
@@ -81,30 +81,46 @@ climate:
     name: "Madoka salon"
     ble_client_id: madoka_salon
     update_interval: 15s
+    outdoor_temperature:
+      name: "Madoka salon Temp. Exterieure"
+    clean_filter:
+      name: "Madoka salon Filtre a Nettoyer"
+    firmware_version:
+      name: "Madoka salon Firmware"
+    eye_brightness:
+      name: "Madoka salon Luminosite LED"
+    reset_filter:
+      name: "Madoka salon Reset Filtre"
   - platform: madoka
     name: "Madoka parents"
     ble_client_id: madoka_parents
     update_interval: 15s
+    outdoor_temperature:
+      name: "Madoka parents Temp. Exterieure"
+    clean_filter:
+      name: "Madoka parents Filtre a Nettoyer"
+    firmware_version:
+      name: "Madoka parents Firmware"
+    eye_brightness:
+      name: "Madoka parents Luminosite LED"
+    reset_filter:
+      name: "Madoka parents Reset Filtre"
 ```
 
-## Correctifs appliqués
+## Entites additionnelles du composant madoka
 
-### ble_client/__init__.py
+Chaque bloc `climate: - platform: madoka` peut maintenant exposer des entites auxiliaires :
 
-Ajout d'une fonction de compatibilité `safe_consume_connection_slots()` qui :
-- Utilise `esp32_ble_tracker.consume_connection_slots()` si disponible (anciennes versions)
-- Retourne une fonction no-op si la fonction n'existe pas (ESPHome 2025.10.0+)
-
-Cela permet la compatibilité avec toutes les versions d'ESPHome.
+- `outdoor_temperature`: capteur de temperature exterieure
+- `clean_filter`: binary sensor indiquant qu'un nettoyage de filtre est necessaire
+- `firmware_version`: text sensor de diagnostic pour la version firmware lue sur la telecommande
+- `eye_brightness`: number (0-19) pour regler la luminosite de la LED facade
+- `reset_filter`: button pour acquitter l'alerte filtre et reinitialiser le timer
 
 ## Structure des fichiers
 
 ```
 esphome_components/
-├── ble_client/
-│   ├── __init__.py          # Version corrigée compatible ESPHome 2025.10.0+
-│   ├── ble_client.cpp
-│   └── ble_client.h
 └── madoka/
     ├── __init__.py
     ├── climate.py
@@ -143,15 +159,19 @@ switch:
 script:
   - id: stop_ble
     then:
-      - logger.log: "Arret BLE"
+      - logger.log: "Arret BLE - scan stop et deconnexion des thermostats"
       - lambda: |-
           id(ble_tracker).stop_scan();
+      - ble_client.disconnect: madoka_salon
+      - ble_client.disconnect: madoka_chambre
 
   - id: start_ble
     then:
-      - logger.log: "Demarrage BLE"
+      - logger.log: "Demarrage BLE - reprise du scan et reconnexion ESP32"
       - lambda: |-
           id(ble_tracker).start_scan();
+      - ble_client.connect: madoka_salon
+      - ble_client.connect: madoka_chambre
 ```
 
 **Procédure de ré-appairage :**
@@ -159,13 +179,11 @@ script:
 2. Appairez votre téléphone avec le Madoka et effectuez vos modifications
 3. Repassez le switch sur **ON** — l'ESP32 se reconnecte automatiquement
 
+> Important : `stop_scan()` seul ne suffit pas toujours. La vraie libération du thermostat pour l'application téléphone vient des actions `ble_client.disconnect`.
+
 > Le switch est déjà inclus dans le fichier `example-config.yaml`.
 
 ## Dépannage
-
-### Erreur `AttributeError: module 'esphome.components.esp32_ble_tracker' has no attribute 'consume_connection_slots'`
-
-Cette erreur se produit avec ESPHome 2025.10.0+ quand on utilise l'ancien composant ble_client. La version corrigée dans ce dossier résout ce problème.
 
 ### Le composant ne se charge pas
 
@@ -174,4 +192,3 @@ Vérifiez que le chemin dans `external_components.source.path` pointe correcteme
 ## Crédits
 
 - Composant madoka original : [Petapton/esphome](https://github.com/Petapton/esphome)
-- Correctifs de compatibilité : Ce repository

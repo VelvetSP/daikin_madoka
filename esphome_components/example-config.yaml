@@ -30,13 +30,13 @@ api:
     key: !secret api_key
 
 ota:
+  - platform: esphome
 
-# IMPORTANT: Utiliser les composants locaux corrigés pour ESPHome 2025.10.0+
 external_components:
   - source:
       type: local
       path: esphome_components  # Chemin relatif depuis le dossier de config ESPHome
-    components: [ madoka, ble_client ]
+    components: [ madoka ]
 
 # Configuration Bluetooth ESP32
 esp32_ble_tracker:
@@ -55,15 +55,23 @@ ble_client:
     id: madoka_salon
     on_disconnect:
       then:
-        # Reconnexion automatique en cas de déconnexion
-        - ble_client.connect: madoka_salon
+        # Reconnexion automatique seulement si le proxy est actif
+        - if:
+            condition:
+              switch.is_on: proxy_enabled
+            then:
+              - ble_client.connect: madoka_salon
   
   # Deuxième thermostat (optionnel)
   - mac_address: "1C:54:9E:90:E3:0E"  # Remplacez par votre adresse MAC
     id: madoka_chambre
     on_disconnect:
       then:
-        - ble_client.connect: madoka_chambre
+        - if:
+            condition:
+              switch.is_on: proxy_enabled
+            then:
+              - ble_client.connect: madoka_chambre
 
 # Entités climate pour chaque thermostat
 climate:
@@ -71,11 +79,31 @@ climate:
     name: "Madoka Salon"
     ble_client_id: madoka_salon
     update_interval: 15s  # Fréquence de mise à jour (en secondes)
+    outdoor_temperature:
+      name: "Madoka Salon Temp. Exterieure"
+    clean_filter:
+      name: "Madoka Salon Filtre a Nettoyer"
+    firmware_version:
+      name: "Madoka Salon Firmware"
+    eye_brightness:
+      name: "Madoka Salon Luminosite LED"
+    reset_filter:
+      name: "Madoka Salon Reset Filtre"
   
   - platform: madoka
     name: "Madoka Chambre"
     ble_client_id: madoka_chambre
     update_interval: 15s
+    outdoor_temperature:
+      name: "Madoka Chambre Temp. Exterieure"
+    clean_filter:
+      name: "Madoka Chambre Filtre a Nettoyer"
+    firmware_version:
+      name: "Madoka Chambre Firmware"
+    eye_brightness:
+      name: "Madoka Chambre Luminosite LED"
+    reset_filter:
+      name: "Madoka Chambre Reset Filtre"
 
 # ---------------------------------------------------------------------------
 # Switch pour désactiver temporairement le BLE (ré-appairage téléphone)
@@ -84,8 +112,8 @@ climate:
 # la main avec l'appli téléphone, l'ESP32 se reconnecte en boucle et bloque
 # le nouvel appairage du téléphone.
 #
-# Solution : désactiver le scan BLE depuis HA, faire les manipulations avec
-# le téléphone, puis réactiver.
+# Solution : désactiver le scan BLE ET déconnecter explicitement les clients
+# depuis HA, faire les manipulations avec le téléphone, puis réactiver.
 # ---------------------------------------------------------------------------
 switch:
   - platform: template
@@ -101,15 +129,19 @@ switch:
 script:
   - id: stop_ble
     then:
-      - logger.log: "Arret BLE - prise de main telephone possible"
+      - logger.log: "Arret BLE - scan stop et deconnexion des thermostats"
       - lambda: |-
           id(ble_tracker).stop_scan();
+      - ble_client.disconnect: madoka_salon
+      - ble_client.disconnect: madoka_chambre
 
   - id: start_ble
     then:
-      - logger.log: "Demarrage BLE - reconnexion ESP32"
+      - logger.log: "Demarrage BLE - reprise du scan et reconnexion ESP32"
       - lambda: |-
           id(ble_tracker).start_scan();
+      - ble_client.connect: madoka_salon
+      - ble_client.connect: madoka_chambre
 
 # Notes importantes:
 # 1. Les thermostats doivent être appairés avec l'ESP32 avant utilisation
