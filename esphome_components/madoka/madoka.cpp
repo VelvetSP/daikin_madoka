@@ -21,8 +21,26 @@ static const uint16_t CMD_SET_SETPOINT = 0x4040;
 static const uint16_t CMD_GET_FAN_SPEED = 0x0050;
 static const uint16_t CMD_SET_FAN_SPEED = 0x4050;
 static const uint16_t CMD_GET_SENSOR_INFORMATION = 0x0110;
+static const uint16_t CMD_GET_CLEAN_FILTER = 0x0100;
+static const uint16_t CMD_GET_VERSION = 0x0130;
+static const uint16_t CMD_GET_EYE_BRIGHTNESS = 0x0302;
+static const uint16_t CMD_RESET_FILTER = 0x4220;
+static const uint16_t CMD_SET_EYE_BRIGHTNESS = 0x4302;
 
 void Madoka::dump_config() { LOG_CLIMATE(TAG, "Daikin Madoka Climate Controller", this); }
+
+void MadokaEyeBrightnessNumber::control(float value) {
+  int level = static_cast<int>(value + 0.5f);
+  if (level < 0) {
+    level = 0;
+  }
+  if (level > 19) {
+    level = 19;
+  }
+  this->parent_->set_eye_brightness(level);
+}
+
+void MadokaResetFilterButton::press_action() { this->parent_->reset_filter(); }
 
 void Madoka::setup() { this->receive_semaphore_ = xSemaphoreCreateMutex(); }
 
@@ -205,11 +223,36 @@ void Madoka::update() {
     return;
   }
 
-  std::vector<uint16_t> all_cmds{CMD_GET_SETTING_STATUS, CMD_GET_OPERATION_MODE, CMD_GET_SETPOINT, CMD_GET_FAN_SPEED,
-                                 CMD_GET_SENSOR_INFORMATION};
-  for (auto cmd : all_cmds) {
-    this->query_(cmd, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_SETTING_STATUS, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_OPERATION_MODE, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_SETPOINT, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_FAN_SPEED, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_SENSOR_INFORMATION, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_VERSION, std::vector<uint8_t>{0x00, 0x00}, 50);
+  this->query_(CMD_GET_EYE_BRIGHTNESS, std::vector<uint8_t>{0x33, 0x01, 0x00}, 50);
+}
+
+void Madoka::set_eye_brightness(uint8_t level) {
+  if (this->node_state != espbt::ClientState::ESTABLISHED) {
+    return;
   }
+  this->query_(CMD_SET_EYE_BRIGHTNESS, std::vector<uint8_t>{0x33, 0x01, level}, 200);
+  if (this->eye_brightness_number_ != nullptr) {
+    this->eye_brightness_number_->publish_state(level);
+  }
+  this->should_update_ = true;
+}
+
+void Madoka::reset_filter() {
+  if (this->node_state != espbt::ClientState::ESTABLISHED) {
+    return;
+  }
+  this->query_(CMD_RESET_FILTER, std::vector<uint8_t>{0x51, 0x01, 0x01, 0xFE, 0x01, 0x01}, 200);
+  if (this->clean_filter_binary_sensor_ != nullptr) {
+    this->clean_filter_binary_sensor_->publish_state(false);
+  }
+  this->should_update_ = true;
 }
 
 bool validate_buffer(std::vector<uint8_t> buffer) { return buffer[0] == buffer.size(); }
@@ -415,6 +458,55 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
         if (argument_id == 0x40) {
           std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
           this->current_temperature = val[0];
+        } else if (argument_id == 0x41 && this->outdoor_temperature_sensor_ != nullptr && len >= 1) {
+          uint8_t value = msg[i];
+          if (value != 0xFF) {
+            this->outdoor_temperature_sensor_->publish_state(value);
+          }
+        }
+        i += len;
+      }
+      break;
+    case CMD_GET_CLEAN_FILTER:
+      while (i < message_size) {
+        uint8_t argument_id = msg[i++];
+        uint8_t len = msg[i++];
+        if (argument_id == 0x62 && this->clean_filter_binary_sensor_ != nullptr && len >= 1) {
+          this->clean_filter_binary_sensor_->publish_state((msg[i] & 0x01) == 0x01);
+        }
+        i += len;
+      }
+      break;
+    case CMD_GET_VERSION: {
+      std::string rc_version;
+      std::string ble_version;
+      while (i < message_size) {
+        uint8_t argument_id = msg[i++];
+        uint8_t len = msg[i++];
+        if (argument_id == 0x45 && len >= 3) {
+          rc_version = std::to_string(msg[i]) + "." + std::to_string(msg[i + 1]) + "." + std::to_string(msg[i + 2]);
+        } else if (argument_id == 0x46 && len >= 2) {
+          ble_version = std::to_string(msg[i]) + "." + std::to_string(msg[i + 1]);
+        }
+        i += len;
+      }
+      if (this->firmware_version_text_sensor_ != nullptr) {
+        if (!rc_version.empty() && !ble_version.empty()) {
+          this->firmware_version_text_sensor_->publish_state("RC " + rc_version + " / BLE " + ble_version);
+        } else if (!rc_version.empty()) {
+          this->firmware_version_text_sensor_->publish_state(rc_version);
+        } else if (!ble_version.empty()) {
+          this->firmware_version_text_sensor_->publish_state("BLE " + ble_version);
+        }
+      }
+      break;
+    }
+    case CMD_GET_EYE_BRIGHTNESS:
+      while (i < message_size) {
+        uint8_t argument_id = msg[i++];
+        uint8_t len = msg[i++];
+        if (argument_id == 0x33 && this->eye_brightness_number_ != nullptr && len >= 1) {
+          this->eye_brightness_number_->publish_state(msg[i]);
         }
         i += len;
       }
