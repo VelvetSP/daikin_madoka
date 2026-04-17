@@ -34,9 +34,15 @@ Si vous hébergez ce repository sur GitHub :
 
 ```yaml
 external_components:
-  - source: github://votre-utilisateur/daikin_madoka
+  - source:
+      type: git
+      url: https://github.com/votre-utilisateur/daikin_madoka
+      ref: main
+      path: esphome_components
     components: [ madoka ]
 ```
+
+Le champ `path: esphome_components` est important dans ce dépôt pour charger la version maintenue du composant externe.
 
 ## Configuration exemple
 

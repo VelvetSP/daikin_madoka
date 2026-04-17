@@ -3,11 +3,17 @@
 #include <vector>
 #include <queue>
 #include <map>
+#include <string>
 
 #include "esphome/core/component.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/ble_client/ble_client.h"
+#include "esphome/components/button/button.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/components/climate/climate.h"
+#include "esphome/components/number/number.h"
+#include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 
 #ifdef USE_ESP32
 
@@ -18,6 +24,18 @@ static const uint8_t BLE_SEND_MAX_RETRIES = 5;
 
 namespace esphome {
 namespace madoka {
+
+class Madoka;
+
+class MadokaEyeBrightnessNumber : public number::Number, public Parented<Madoka> {
+ public:
+  void control(float value) override;
+};
+
+class MadokaResetFilterButton : public button::Button, public Parented<Madoka> {
+ public:
+  void press_action() override;
+};
 
 struct Setpoint {
   uint16_t cooling;
@@ -56,6 +74,11 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
   uint16_t wwr_handle_;
   SemaphoreHandle_t receive_semaphore_ = nullptr;
   Status cur_status_;
+  sensor::Sensor *outdoor_temperature_sensor_{nullptr};
+  binary_sensor::BinarySensor *clean_filter_binary_sensor_{nullptr};
+  text_sensor::TextSensor *firmware_version_text_sensor_{nullptr};
+  number::Number *eye_brightness_number_{nullptr};
+  button::Button *reset_filter_button_{nullptr};
 
   std::vector<std::vector<uint8_t>> split_payload_(std::vector<uint8_t> msg);
   std::vector<uint8_t> prepare_message_(uint16_t cmd, std::vector<uint8_t> args);
@@ -73,6 +96,17 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
                            esp_ble_gattc_cb_param_t *param) override;
   void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) override;
   void dump_config() override;
+  void set_outdoor_temperature_sensor(sensor::Sensor *sensor) { this->outdoor_temperature_sensor_ = sensor; }
+  void set_clean_filter_binary_sensor(binary_sensor::BinarySensor *sensor) {
+    this->clean_filter_binary_sensor_ = sensor;
+  }
+  void set_firmware_version_text_sensor(text_sensor::TextSensor *sensor) {
+    this->firmware_version_text_sensor_ = sensor;
+  }
+  void set_eye_brightness_number(number::Number *number) { this->eye_brightness_number_ = number; }
+  void set_reset_filter_button(button::Button *button) { this->reset_filter_button_ = button; }
+  void set_eye_brightness(uint8_t level);
+  void reset_filter();
   float get_setup_priority() const override { return setup_priority::DATA; }
   climate::ClimateTraits traits() override {
     auto traits = climate::ClimateTraits();
