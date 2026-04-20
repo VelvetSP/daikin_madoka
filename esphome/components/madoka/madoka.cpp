@@ -269,9 +269,14 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
     return;
   }
   if (this->pending_chunks_.count(chunk_id)) {
-    ESP_LOGE(TAG, "Another packet with the same chunk ID is already in the buffer.");
-    ESP_LOGD(TAG, "Chunk ID: %d.", chunk_id);
-    return;
+    if (chunk_id == 0) {
+      ESP_LOGW(TAG, "New message detected, clearing incomplete buffer (chunk_id=0).");
+      this->pending_chunks_.clear();
+    } else {
+      ESP_LOGE(TAG, "Another packet with the same chunk ID is already in the buffer.");
+      ESP_LOGD(TAG, "Chunk ID: %d.", chunk_id);
+      return;
+    }
   }
   this->pending_chunks_[chunk_id] = chk;
 
