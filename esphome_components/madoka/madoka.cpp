@@ -230,9 +230,18 @@ void Madoka::update() {
   this->query_(CMD_GET_SETPOINT, std::vector<uint8_t>{0x00, 0x00}, 50);
   this->query_(CMD_GET_FAN_SPEED, std::vector<uint8_t>{0x00, 0x00}, 50);
   this->query_(CMD_GET_SENSOR_INFORMATION, std::vector<uint8_t>{0x00, 0x00}, 50);
-  this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
-  this->query_(CMD_GET_VERSION, std::vector<uint8_t>{0x00, 0x00}, 50);
-  this->query_(CMD_GET_EYE_BRIGHTNESS, std::vector<uint8_t>{0x33, 0x01, 0x00}, 50);
+  // Only poll the optional auxiliary entities when they are actually
+  // configured; each query is a BLE round-trip plus a blocking delay, so
+  // skipping the unused ones keeps every poll shorter.
+  if (this->clean_filter_binary_sensor_ != nullptr) {
+    this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
+  }
+  if (this->firmware_version_text_sensor_ != nullptr) {
+    this->query_(CMD_GET_VERSION, std::vector<uint8_t>{0x00, 0x00}, 50);
+  }
+  if (this->eye_brightness_number_ != nullptr) {
+    this->query_(CMD_GET_EYE_BRIGHTNESS, std::vector<uint8_t>{0x33, 0x01, 0x00}, 50);
+  }
 }
 
 void Madoka::set_eye_brightness(uint8_t level) {
@@ -272,8 +281,8 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
   }
   if (this->pending_chunks_.count(chunk_id)) {
     if (chunk_id == 0) {
-      // Nouveau message entrant : le buffer précédent est périmé, on le vide
-      ESP_LOGW(TAG, "Nouveau message détecté, vidage du buffer incomplet (chunk_id=0).");
+      // New incoming message: the previous buffer is stale, so clear it.
+      ESP_LOGW(TAG, "New message detected, clearing incomplete buffer (chunk_id=0).");
       this->pending_chunks_.clear();
     } else {
       ESP_LOGE(TAG, "Another packet with the same chunk ID is already in the buffer.");
@@ -352,29 +361,44 @@ void Madoka::query_(uint16_t cmd, std::vector<uint8_t> args, int t_d) {
 }
 
 void Madoka::parse_cb_(std::vector<uint8_t> msg) {
+  // A well-formed frame is at least 4 bytes: the function id lives at msg[2..3].
+  // Bail on anything shorter so the header reads below can't run off the end.
+  if (msg.size() < 4) {
+    ESP_LOGW(TAG, "Discarding short frame (%u bytes)", (unsigned) msg.size());
+    return;
+  }
   uint16_t function_id = msg[2] << 8 | msg[3];
-  uint8_t i = 4;
-  uint8_t message_size = msg.size();
+  // size_t (not uint8_t) so `i + len` cannot wrap and re-enter the loop.
+  size_t i = 4;
+  size_t message_size = msg.size();
 
+  // Each TLV is [argument_id][len][len payload bytes]. Every loop below:
+  //   - requires 2 bytes for argument_id+len  -> `while (i + 1 < message_size)`
+  //   - requires the declared payload to fit  -> `if (i + len > message_size) break;`
+  //   - checks `len >= N` before reading N payload bytes.
+  // These guards are inert for well-formed frames and only reject malformed
+  // ones (a malfunctioning/spoofed controller can otherwise drive an OOB read).
   switch (function_id) {
     case CMD_GET_SETTING_STATUS:
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
-        if (argument_id == 0x20) {
-          std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
-          this->cur_status_.status = val[0];
+        if (i + len > message_size)
+          break;
+        if (argument_id == 0x20 && len >= 1) {
+          this->cur_status_.status = msg[i];
         }
         i += len;
       }
       break;
     case CMD_GET_OPERATION_MODE:
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
-        if (argument_id == 0x20) {
-          std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
-          this->cur_status_.mode = val[0];
+        if (i + len > message_size)
+          break;
+        if (argument_id == 0x20 && len >= 1) {
+          this->cur_status_.mode = msg[i];
         }
         i += len;
       }
@@ -413,20 +437,20 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       // points; collapse them into the single target_temperature, showing the
       // one relevant to the active mode.
       float cooling_set_point = NAN, heating_set_point = NAN;
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
+        if (i + len > message_size)
+          break;
         switch (argument_id) {
-          case 0x20: {
-            std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
-            cooling_set_point = (float) (val[0] << 8 | val[1]) / 128;
+          case 0x20:
+            if (len >= 2)
+              cooling_set_point = (float) (msg[i] << 8 | msg[i + 1]) / 128;
             break;
-          }
-          case 0x21: {
-            std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
-            heating_set_point = (float) (val[0] << 8 | val[1]) / 128;
+          case 0x21:
+            if (len >= 2)
+              heating_set_point = (float) (msg[i] << 8 | msg[i + 1]) / 128;
             break;
-          }
         }
         i += len;
       }
@@ -436,9 +460,11 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
     }
     case CMD_GET_FAN_SPEED: {
       uint8_t fan_mode = 255;
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
+        if (i + len > message_size)
+          break;
         if (this->cur_status_.mode == 1) {
         } else if ((argument_id == 0x21 && len == 1 && this->cur_status_.mode == 4) ||
                    (argument_id == 0x20 && len == 1 && this->cur_status_.mode != 4)) {
@@ -467,12 +493,13 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       break;
     }
     case CMD_GET_SENSOR_INFORMATION:
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
-        if (argument_id == 0x40) {
-          std::vector<uint8_t> val(msg.begin() + i, msg.begin() + i + len);
-          this->current_temperature = val[0];
+        if (i + len > message_size)
+          break;
+        if (argument_id == 0x40 && len >= 1) {
+          this->current_temperature = msg[i];
         } else if (argument_id == 0x41 && this->outdoor_temperature_sensor_ != nullptr && len >= 1) {
           uint8_t value = msg[i];
           if (value != 0xFF) {
@@ -483,9 +510,11 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       }
       break;
     case CMD_GET_CLEAN_FILTER:
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
+        if (i + len > message_size)
+          break;
         if (argument_id == 0x62 && this->clean_filter_binary_sensor_ != nullptr && len >= 1) {
           this->clean_filter_binary_sensor_->publish_state((msg[i] & 0x01) == 0x01);
         }
@@ -495,9 +524,11 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
     case CMD_GET_VERSION: {
       std::string rc_version;
       std::string ble_version;
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
+        if (i + len > message_size)
+          break;
         if (argument_id == 0x45 && len >= 3) {
           rc_version = std::to_string(msg[i]) + "." + std::to_string(msg[i + 1]) + "." + std::to_string(msg[i + 2]);
         } else if (argument_id == 0x46 && len >= 2) {
@@ -517,9 +548,11 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       break;
     }
     case CMD_GET_EYE_BRIGHTNESS:
-      while (i < message_size) {
+      while (i + 1 < message_size) {
         uint8_t argument_id = msg[i++];
         uint8_t len = msg[i++];
+        if (i + len > message_size)
+          break;
         if (argument_id == 0x33 && this->eye_brightness_number_ != nullptr && len >= 1) {
           this->eye_brightness_number_->publish_state(msg[i]);
         }

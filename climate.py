@@ -365,14 +365,19 @@ class DaikinMadokaClimate(ClimateEntity):
     def device_info(self):
         """Return a device description for device registry."""
 
+        # dev_info is None until async_update successfully calls read_info();
+        # if the device was offline at startup that call is swallowed and
+        # dev_info stays None. Guard so `in None` can't raise TypeError when HA
+        # reads this property during entity/device registration.
+        info = self.dev_info or {}
         model = (
-            ("BRC1H" + self.dev_info["Model Number String"])
-            if "Model Number String" in self.dev_info
+            ("BRC1H" + info["Model Number String"])
+            if "Model Number String" in info
             else ""
         )
         sw_version = (
-            self.dev_info["Software Revision String"]
-            if "Software Revision String" in self.dev_info
+            info["Software Revision String"]
+            if "Software Revision String" in info
             else ""
         )
         return {
