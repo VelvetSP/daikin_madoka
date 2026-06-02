@@ -144,3 +144,5 @@ POST_HA*
 
 # Local AI/editor settings
 .claude/
+AGENTS.md
+CONTEXT.md

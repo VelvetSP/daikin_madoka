@@ -1,21 +1,10 @@
 """Support for Daikin AC sensors."""
-from homeassistant.const import (
-    CONF_TYPE,
-    CONF_UNIT_OF_MEASUREMENT,
-    UnitOfTemperature
-)
 
-from homeassistant.components.sensor import (
-    SensorDeviceClass
-)
-
-from homeassistant.helpers.entity import Entity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.const import UnitOfTemperature
 
 from . import DOMAIN
-from .const import (
-    SENSOR_TYPE_TEMPERATURE,
-    CONTROLLERS,
-)
+from .const import CONTROLLERS
 
 from pymadoka import Controller
 from pymadoka.feature import ConnectionException, ConnectionStatus
@@ -30,25 +19,24 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    """Set up Daikin climate based on config_entry."""
-    ent = []
-    for controller in hass.data[DOMAIN][CONTROLLERS].values():
-        ent.append(MadokaSensor(controller))
-    async_add_entities(ent)
+    """Set up Daikin sensors based on config_entry."""
+    entities = []
+    for controller in hass.data[DOMAIN][entry.entry_id][CONTROLLERS].values():
+        entities.append(MadokaIndoorSensor(controller))
+        entities.append(MadokaOutdoorSensor(controller))
+    async_add_entities(entities)
 
 
-class MadokaSensor(Entity):
-    """Representation of a Sensor."""
+class MadokaSensor(SensorEntity):
+    """Base representation of a Madoka temperature sensor."""
 
-    def __init__(self, controller: Controller) -> None:
+    def __init__(self, controller: Controller, suffix: str, name: str) -> None:
         """Initialize the sensor."""
         self.controller = controller
-        self._sensor = {
-            CONF_TYPE: SENSOR_TYPE_TEMPERATURE,
-            CONF_UNIT_OF_MEASUREMENT: UnitOfTemperature.CELSIUS,
-        }
- 
-    @property   
+        self._suffix = suffix
+        self._name = name
+
+    @property
     def available(self):
         """Return the availability."""
         return self.controller.connection.connection_status is ConnectionStatus.CONNECTED
@@ -56,20 +44,17 @@ class MadokaSensor(Entity):
     @property
     def unique_id(self):
         """Return a unique ID."""
-        return self.controller.connection.address
+        return f"{self.controller.connection.address}_{self._suffix}"
 
     @property
     def name(self):
         """Return the name of the thermostat, if any."""
-        return self.controller.connection.name if self.controller.connection.name is not None else self.controller.connection.address
-
-
-    @property
-    def state(self):
-        """Return the internal state of the sensor."""
-        if self.controller.temperatures.status is None:
-            return None
-        return self.controller.temperatures.status.indoor
+        base_name = (
+            self.controller.connection.name
+            if self.controller.connection.name is not None
+            else self.controller.connection.address
+        )
+        return f"{base_name} {self._name}"
 
     @property
     def device_class(self):
@@ -86,6 +71,20 @@ class MadokaSensor(Entity):
         """Return the unit of measurement."""
         return UnitOfTemperature.CELSIUS
 
+    @property
+    def device_info(self):
+        """Return device registry information shared with the climate entity."""
+        return {
+            "identifiers": {(DOMAIN, self.controller.connection.address)},
+            "name": (
+                self.controller.connection.name
+                if self.controller.connection.name is not None
+                else self.controller.connection.address
+            ),
+            "manufacturer": "DAIKIN",
+            "model": "BRC1H",
+        }
+
     async def async_update(self):
         """Retrieve latest state."""
         try:
@@ -96,11 +95,34 @@ class MadokaSensor(Entity):
             pass
 
     @property
-    async def async_device_info(self):
-        """Return a device description for device registry."""
-        try:
-            return await self.controller.read_info()
-        except ConnectionAbortedError:
-            pass
-        except ConnectionException:
-            pass
+    def native_value(self):
+        """Return the sensor value."""
+        raise NotImplementedError
+
+
+class MadokaIndoorSensor(MadokaSensor):
+    """Indoor temperature sensor."""
+
+    def __init__(self, controller: Controller) -> None:
+        super().__init__(controller, "indoor_temperature", "Indoor Temperature")
+
+    @property
+    def native_value(self):
+        """Return the indoor temperature."""
+        if self.controller.temperatures.status is None:
+            return None
+        return self.controller.temperatures.status.indoor
+
+
+class MadokaOutdoorSensor(MadokaSensor):
+    """Outdoor temperature sensor."""
+
+    def __init__(self, controller: Controller) -> None:
+        super().__init__(controller, "outdoor_temperature", "Outdoor Temperature")
+
+    @property
+    def native_value(self):
+        """Return the outdoor temperature."""
+        if self.controller.temperatures.status is None:
+            return None
+        return self.controller.temperatures.status.outdoor

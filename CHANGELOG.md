@@ -1,96 +1,44 @@
-# Changelog - ESPHome 2025.10.0+ Support
+# Changelog
 
-## Version 2.0.0 - October 15, 2025
+## v2.1.1 - Avril 2026
 
-### Major additions
+### Fixes
 
-#### ESPHome Components (`esphome_components/`)
+- **ble_client**: declare `synchronous=True/False` on all 6 `register_action()` calls — removes ESPHome 2026.4 warnings about missing `synchronous=` parameter
+- **madoka**: both `esphome/components/` and `esphome_components/` copies now use `add_feature_flags()` consistently — removes remaining `-Wdeprecated-declarations` compiler warnings
 
-Added local, patched ESPHome Madoka components:
+No behaviour change. Thanks to [@Dvorf](https://github.com/Dvorf) for identifying both issues.
 
-- **madoka/** : Climate component for ESP32
-  - Copied from Petapton/esphome@madoka fork
-  - Compatible with all ESPHome versions
+---
 
-- **ble_client/** : Patched BLE client component
-  - **CRITICAL FIX**: `safe_consume_connection_slots()` wrapper for ESPHome 2025.10.0+
-  - Fixes `AttributeError: module 'esphome.components.esp32_ble_tracker' has no attribute 'consume_connection_slots'`
-  - Backward-compatible with older ESPHome versions
+## v2.1.0 - Avril 2026
 
-### Documentation
+### ESPHome
 
-- `esphome_components/README.md`: Full usage guide
-- `esphome_components/DEPLOYMENT.md`: Detailed deployment guide
-- `esphome_components/example-config.yaml`: Complete example configuration
-- Updated `README.md` to explain both approaches (HA integration and ESPHome proxy)
+- **Nouvelles entités** : `outdoor_temperature`, `clean_filter`, `firmware_version`, `eye_brightness`, `reset_filter` exposées par le composant madoka
+- **Suppression du `ble_client` local** : ESPHome 2026.4 gère nativement la gestion des connexions BLE, le composant local n'est plus nécessaire
+- **Correction deprecations ESPHome 2026.4** : `ClimateTraits.set_supports_current_temperature()` et `set_supports_two_point_target_temperature()` remplacés par `add_feature_flags()`
+- **Correction `AUTO_LOAD`** : ajout des dépendances `binary_sensor`, `button`, `number`, `sensor`, `text_sensor` dans `climate.py`
+- **Script stop/start BLE amélioré** : ajout de `ble_client.disconnect` explicite en plus de `stop_scan()` pour libérer correctement le thermostat lors du ré-appairage téléphone
+- **Reconnexion conditionnelle** : le `on_disconnect` ne relance la connexion que si le switch proxy est actif
 
-### Structure changes
+### Compatibilité
 
-```
-daikin_madoka/
-├── esphome_components/          # NEW
-│   ├── madoka/                  # ESP32 climate component
-│   ├── ble_client/              # Patched BLE client
-│   ├── README.md
-│   ├── DEPLOYMENT.md
-│   └── example-config.yaml
-├── .github/                     # NEW
-│   └── workflows/ci.yml
-├── __init__.py                  # Home Assistant integration
-├── climate.py
-├── config_flow.py
-├── sensor.py
-└── README.md                    # UPDATED
-```
+Requiert **ESPHome 2025.10+**. Testé et validé sur ESPHome 2026.4.0.
 
-## Migration
+---
 
-### For ESPHome users
+## v2.0.0 - Octobre 2025
 
-**Before:**
-```yaml
-external_components:
-  - source: github://Petapton/esphome@madoka
-    components: [ madoka, ble_client ]
-```
+### Ajouts
 
-**After:**
-```yaml
-external_components:
-  - source:
-      type: local
-      path: esphome_components
-    components: [ madoka, ble_client ]
-```
+- Composants ESPHome dans `esphome_components/madoka/`
+- Support ESP32-S3 (M5Stack Atom S3 Lite)
+- Documentation complète (README, exemple de configuration)
+- Intégration HA directe (existante, inchangée)
 
-### For Home Assistant integration users
+### Crédits
 
-No changes required. The integration works the same as before.
-
-## Issues fixed
-
-- ✅ ESPHome 2025.10.0+ compatibility
-- ✅ `AttributeError` in `esp32_ble_tracker.consume_connection_slots`
-- ✅ Missing deployment documentation for ESPHome
-- ✅ Missing example configuration file
-
-## Technical notes
-
-### Compatibility wrapper
-
-```python
-def safe_consume_connection_slots(slots, component_name):
-    """Wrapper for consume_connection_slots, compatible with all ESPHome versions."""
-    if hasattr(esp32_ble_tracker, 'consume_connection_slots'):
-        return esp32_ble_tracker.consume_connection_slots(slots, component_name)
-    else:
-        return lambda config: config  # ESPHome 2025.10.0+
-```
-
-This function automatically detects the ESPHome version and adapts accordingly.
-
-## Credits
-
-- Original Home Assistant integration: [@mduran80](https://github.com/mduran80/daikin_madoka)
-- ESPHome Madoka component: [Petapton/esphome](https://github.com/Petapton/esphome)
-- ESPHome 2025.10.0+ fixes: this repository
+- Intégration HA originale : [@mduran80](https://github.com/mduran80/daikin_madoka)
+- Composant ESPHome madoka : [Petapton/esphome](https://github.com/Petapton/esphome)
+- Support ESP32-S3 et switch ré-appairage : [@Quev1n](https://forum.hacf.fr)
