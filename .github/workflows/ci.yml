@@ -33,3 +33,11 @@ jobs:
       - name: Syntax check
         run: |
           python -m compileall -q .
+
+      - name: Component trees in sync
+        run: |
+          # esphome_components/madoka (type:local install) and
+          # esphome/components/madoka (github:// external_components install) must
+          # stay byte-identical, or a fix lands in one tree and silently misses
+          # the other depending on how a user installs the component.
+          diff -rq esphome_components/madoka esphome/components/madoka
