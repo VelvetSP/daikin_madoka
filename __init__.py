@@ -79,9 +79,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {CONTROLLERS: controllers}
-    for component in COMPONENT_TYPES:
-        coroutine = hass.config_entries.async_forward_entry_setups(entry, [component])
-        hass.async_create_task(coroutine)
+    # Await the platform forwarding so the entry is only reported set up once
+    # the climate/sensor platforms actually exist; this also lets platform
+    # setup failures propagate (retry the entry) instead of being swallowed in
+    # detached tasks, and avoids racing async_unload_entry on a reload.
+    await hass.config_entries.async_forward_entry_setups(entry, COMPONENT_TYPES)
 
     return True
 

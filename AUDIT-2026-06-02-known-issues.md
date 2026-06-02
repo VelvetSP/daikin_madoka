@@ -6,19 +6,21 @@ Read-only hidden-bug audit of the ESPHome C++ component (`esphome_components/mad
 
 **Severity scale:** CRITICAL (breaks a shipped feature / crash on common path) · HIGH (crash or wrong behavior on a common path) · MEDIUM (robustness / efficiency / non-idiomatic) · LOW (cosmetic / latent / incremental).
 
+> **Resolution (2026-06-02):** ISSUE-1, ISSUE-2, ISSUE-3, ISSUE-5, ISSUE-6 are **fixed in this branch**. ISSUE-2's C++ changes ship **uncompiled** (no ESPHome toolchain here) — canary-flash one device before flashing all. ISSUE-4 (blocking `delay()`) is **deferred**: its only real fix is a BLE-timing rewrite that cannot be validated without hardware, so it is left documented rather than shipped untested into a deploy. Each Status line below reflects this.
+
 **Threat-model note (C++ parsing issues):** the malformed-frame findings require BLE proximity to a malfunctioning, spoofed, or MITM'd controller — not internet-remote. Impact is bounded (out-of-bounds *read* / device reboot / garbage state); there is no write primitive or RCE.
 
 ---
 
 ## ISSUE-1 · `device_info` raises `TypeError` when the device is offline at startup
-- **Severity:** HIGH · **Confidence:** 90 · **Status:** Confirmed (verified)
+- **Severity:** HIGH · **Confidence:** 90 · **Status:** ✅ FIXED (this branch) — `device_info` now reads from `info = self.dev_info or {}`
 - **Area:** Home Assistant integration
 - **File:line:** `climate.py:368-377` (`self.dev_info` initialized `None` at `climate.py:94`)
 - **Problem:** `device_info` evaluates `"Model Number String" in self.dev_info` (`:370`) and `"Software Revision String" in self.dev_info` (`:375`). `self.dev_info` starts as `None` and is only assigned in `async_update` via `await self.controller.read_info()`, which sits inside a `try/except` that swallows `ConnectionAbortedError`/`ConnectionException`. If the device is offline/unreachable when the entity is added (a common condition for a BLE thermostat), `dev_info` stays `None`. Entities are added with `update_before_add=True` (`:85`), and HA reads `device_info` during entity registration even after the swallowed exception → `TypeError: argument of type 'NoneType' is not iterable`. The entity fails to register / gets no device-registry entry (isolated to this entity by HA's platform wrapper — not a whole-integration crash).
 - **Suggested fix:** Guard at the top of `device_info`: `info = self.dev_info or {}` and read from `info` (or `if self.dev_info is None: return None`).
 
 ## ISSUE-2 · `parse_cb_` does not validate BLE frame lengths → out-of-bounds reads & possible non-termination
-- **Severity:** MEDIUM · **Confidence:** 90 · **Status:** Confirmed (verified) — *root-cause cluster of 3 defects*
+- **Severity:** MEDIUM · **Confidence:** 90 · **Status:** ✅ FIXED (this branch, both trees) — `<4` header guard, `size_t` index, per-TLV `i+len>message_size` break, `len>=N` checks; `std::vector val` slices replaced with bounds-guarded `msg[i]` reads. *Ships uncompiled — canary-flash first.* — *root-cause cluster of 3 defects*
 - **Area:** ESPHome C++ component
 - **File:line:** `esphome_components/madoka/madoka.cpp:354-531` (and the mirror `esphome/components/madoka/madoka.cpp`)
 - **Problem:** Device-controlled BLE notification bytes flow `gattc_event_handler` (`:204-214`) → `process_incoming_chunk_` → `parse_cb_`. The only validation is `validate_buffer` (`:260`): `buffer[0] == buffer.size()` — it checks the **outer** total length only, never the inner TLV `len` fields or the header. Three concrete defects:
@@ -28,7 +30,7 @@ Read-only hidden-bug audit of the ESPHome C++ component (`esphome_components/mad
 - **Suggested fix:** Add a single bounds-checked TLV reader used by all cases: bail the frame if `message_size < 4` before reading the header, and at each iteration require `i + 2 <= message_size` (arg+len bytes) and `i + len <= message_size` before consuming the payload; check `len >= N` before any `val[N-1]`. Use `size_t i` to remove the wrap. Apply to both trees (see ISSUE-6).
 
 ## ISSUE-3 · `async_setup_entry` forwards platform setups as fire-and-forget tasks
-- **Severity:** MEDIUM · **Confidence:** 90 · **Status:** Confirmed (verified)
+- **Severity:** MEDIUM · **Confidence:** 90 · **Status:** ✅ FIXED (this branch) — replaced the per-component `async_create_task` loop with one awaited `async_forward_entry_setups(entry, COMPONENT_TYPES)`. (The nearby `start()`-exception observation is left documented, not changed — broadening it would flip entity UX from "unavailable" to "absent".)
 - **Area:** Home Assistant integration
 - **File:line:** `__init__.py:82-86`
 - **Problem:** The loop wraps `hass.config_entries.async_forward_entry_setups(entry, [component])` in `hass.async_create_task` per component and returns `True` immediately without awaiting. The idiomatic form is a single awaited call with the full list: `await hass.config_entries.async_forward_entry_setups(entry, COMPONENT_TYPES)`. Consequences: (1) the entry is reported set-up before `climate`/`sensor` platforms actually exist, racing against `async_unload_entry` (`:89-93`) on a reload; (2) platform-setup failures no longer fail/retry the config entry (they're logged by HA's task machinery but don't propagate). *Nuance from verification:* the errors are **logged** by HA (not fully silent), and in the common fast path startup works — the defect bites on reload races and masked platform failures.
@@ -36,7 +38,7 @@ Read-only hidden-bug audit of the ESPHome C++ component (`esphome_components/mad
 - **Suggested fix:** Replace the loop with one awaited `async_forward_entry_setups(entry, COMPONENT_TYPES)`; broaden the `start()` guard and skip storing controllers that failed to start.
 
 ## ISSUE-4 · Blocking `esphome::delay()` inside `query_` stalls the ESPHome main loop
-- **Severity:** MEDIUM · **Confidence:** 87 · **Status:** Confirmed-with-correction (verified)
+- **Severity:** MEDIUM · **Confidence:** 87 · **Status:** ⏸️ DEFERRED (not changed) — the only real fix is a non-blocking BLE-timing state-machine rewrite that cannot be validated without the hardware; shipping it untested into a deploy of working thermostats is the larger risk. Left documented.
 - **Area:** ESPHome C++ component
 - **File:line:** `esphome_components/madoka/madoka.cpp:351` (`delay`), `:221-236` (`update`), `:65-141` (`control`)
 - **Problem:** `query_` ends with a blocking `esphome::delay(t_d)`. `update()` issues 8 queries × 50 ms ≈ 400 ms; `control()` worst case ≈ 1.4 s (mode 600 + status 200 + setpoint 400 + fan 200), and `control()` sets `should_update_ = true` so a user action chains ~1.4 s then ~400 ms on the next loop — all synchronous on the ESPHome main loop.
@@ -44,14 +46,14 @@ Read-only hidden-bug audit of the ESPHome C++ component (`esphome_components/mad
 - **Suggested fix:** Drive per-command pacing from the cooperative `loop()`/a small state machine (queue commands, advance on a timer) instead of blocking; or reduce the cumulative per-poll delay.
 
 ## ISSUE-5 · `update()` polls clean-filter / version / eye-brightness even when those entities are unconfigured
-- **Severity:** LOW · **Confidence:** 93 · **Status:** Confirmed (verified) · *related to ISSUE-4*
+- **Severity:** LOW · **Confidence:** 93 · **Status:** ✅ FIXED (this branch) — each optional query in `update()` now guarded on its entity pointer being non-null · *related to ISSUE-4*
 - **Area:** ESPHome C++ component
 - **File:line:** `esphome_components/madoka/madoka.cpp:233-235`
 - **Problem:** `update()` unconditionally queries `CMD_GET_CLEAN_FILTER`, `CMD_GET_VERSION`, `CMD_GET_EYE_BRIGHTNESS`. The pointers `clean_filter_binary_sensor_` / `firmware_version_text_sensor_` / `eye_brightness_number_` default to `nullptr` (`madoka.h:78-80`) and are only set by optional config. The parse side null-guards (data discarded), but each unused query is a real BLE write + ~50 ms blocking delay (≈150 ms/poll wasted) when those entities aren't configured. Outdoor temperature is *not* affected (it rides the existing `CMD_GET_SENSOR_INFORMATION`).
 - **Suggested fix:** Guard each optional query on its pointer, matching the codebase's own pattern (`set_eye_brightness`/`reset_filter` already null-check these): `if (this->clean_filter_binary_sensor_) this->query_(CMD_GET_CLEAN_FILTER, …);`.
 
 ## ISSUE-6 · Two hand-synced component trees — drift has already caused a real bug
-- **Severity:** MEDIUM · **Confidence:** 95 · **Status:** Confirmed (verified, primary evidence)
+- **Severity:** MEDIUM · **Confidence:** 95 · **Status:** ✅ FIXED (this branch) — reconciled the `:275-276` drift (both trees now English + byte-identical) and added a CI step (`.github/workflows/ci.yml`) that runs `diff -rq esphome_components/madoka esphome/components/madoka` to fail future divergence
 - **Area:** Repo structure
 - **File:line:** `esphome_components/madoka/madoka.cpp:275-276` vs `esphome/components/madoka/madoka.cpp:275`
 - **Problem:** Both trees are independently installable: `esphome_components/` is the `type: local` path (per `example-config.yaml:35-39`), `esphome/components/madoka/` is the `github://` external-components layout. Which path a user installs from decides which code runs. They are maintained byte-identical **by hand**, and the hazard is **not** hypothetical:
