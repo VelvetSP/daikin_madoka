@@ -102,10 +102,6 @@ privileged: true
 
 Kudos to [Jose](https://community.home-assistant.io/u/jcsogo) for the solution.
 
-## TODO
-This document.
-Icon and integration images.
-
 ## Credits
 
 Based on the original work by [@mduran80](https://github.com/mduran80/daikin_madoka).  
