@@ -88,12 +88,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
 async def async_unload_entry(hass, config_entry):
     """Unload a config entry."""
-    await asyncio.wait(
-        [
-            hass.async_create_task(hass.config_entries.async_forward_entry_unload(config_entry, component))
-            for component in COMPONENT_TYPES
-        ]
+    unload_ok = await hass.config_entries.async_unload_platforms(
+        config_entry, COMPONENT_TYPES
     )
-    hass.data[DOMAIN].pop(config_entry.entry_id)
 
-    return True
+    if unload_ok:
+        data = hass.data[DOMAIN].pop(config_entry.entry_id, None)
+        if data:
+            for device, controller in data[CONTROLLERS].items():
+                # Release the BLE connection so a reload can reconnect cleanly.
+                # Without this, the old connection lingers and the integration
+                # gets stuck "not available" until Home Assistant restarts.
+                try:
+                    await controller.stop()
+                except Exception:  # pylint: disable=broad-except
+                    _LOGGER.exception(
+                        "Error while disconnecting from device %s", device
+                    )
+
+    return unload_ok
