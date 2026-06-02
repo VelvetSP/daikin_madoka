@@ -126,9 +126,11 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
     });
     traits.set_visual_min_temperature(16);
     traits.set_visual_max_temperature(32);
-    traits.set_visual_temperature_step(1);
-    traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE |
-                             climate::CLIMATE_REQUIRES_TWO_POINT_TARGET_TEMPERATURE);
+    traits.set_visual_temperature_step(0.5);
+    // Single target temperature: omitting the two-point flag makes the single
+    // `target_temperature` the active control. We map it onto the device's
+    // separate cooling/heating set points in control()/parse_cb_().
+    traits.add_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE);
     return traits;
   }
 };
