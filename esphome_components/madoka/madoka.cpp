@@ -407,6 +407,7 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
           break;
         if (argument_id == 0x20 && len >= 1) {
           this->cur_status_.mode = msg[i];
+          this->op_mode_known_ = true;
         }
         i += len;
       }
@@ -419,22 +420,29 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
     case CMD_GET_OPERATION_MODE:
       // ESP_LOGI(TAG, "status: %d, mode: %d", this->cur_status_.status, this->cur_status_.mode);
       if (this->cur_status_.status) {
-        switch (this->cur_status_.mode) {
-          case 0:
-            this->mode = climate::CLIMATE_MODE_FAN_ONLY;
-            break;
-          case 1:
-            this->mode = climate::CLIMATE_MODE_DRY;
-            break;
-          case 2:
-            this->mode = climate::CLIMATE_MODE_HEAT_COOL;
-            break;
-          case 3:
-            this->mode = climate::CLIMATE_MODE_COOL;
-            break;
-          case 4:
-            this->mode = climate::CLIMATE_MODE_HEAT;
-            break;
+        // PER-85: only derive the running mode from cur_status_.mode once we have actually
+        // received an operation-mode (CMD_GET_OPERATION_MODE) reply. On a degraded BLE link
+        // (e.g. a controller that drops the 0x0030 reply) cur_status_.mode would otherwise be
+        // its uninitialised 0 and we'd publish a confidently-wrong FAN_ONLY. Until the first
+        // real reply we hold the existing mode (default / restored) instead of fabricating one.
+        if (this->op_mode_known_) {
+          switch (this->cur_status_.mode) {
+            case 0:
+              this->mode = climate::CLIMATE_MODE_FAN_ONLY;
+              break;
+            case 1:
+              this->mode = climate::CLIMATE_MODE_DRY;
+              break;
+            case 2:
+              this->mode = climate::CLIMATE_MODE_HEAT_COOL;
+              break;
+            case 3:
+              this->mode = climate::CLIMATE_MODE_COOL;
+              break;
+            case 4:
+              this->mode = climate::CLIMATE_MODE_HEAT;
+              break;
+          }
         }
       } else {
         this->mode = climate::CLIMATE_MODE_OFF;
