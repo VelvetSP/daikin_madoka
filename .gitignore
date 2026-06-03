@@ -146,3 +146,14 @@ POST_HA*
 .claude/
 AGENTS.md
 CONTEXT.md
+# --- PUBLIC REPO GUARD: never commit internal research / audit / troubleshooting ---
+# This is a public fork. Internal AI-generated audits, plans, and dev notes must stay local.
+research/
+AUDIT-*.md
+SUMMARY.md
+*-plan-v*.md
+*-plan-final.md
+KNOWN-ISSUES*.md
+*-troubleshoot*.md
+*TROUBLESHOOTING*
+NOTES-*.md
