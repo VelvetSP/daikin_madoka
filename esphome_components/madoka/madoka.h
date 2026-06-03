@@ -74,6 +74,10 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
   uint16_t wwr_handle_;
   SemaphoreHandle_t receive_semaphore_ = nullptr;
   Status cur_status_;
+  // True once a CMD_GET_OPERATION_MODE reply has been parsed at least once. Until then
+  // cur_status_.mode is its uninitialised default (0 == FAN_ONLY), so on a flaky link that
+  // never delivers the operation-mode reply we must NOT republish a mode from it (PER-85).
+  bool op_mode_known_ = false;
   sensor::Sensor *outdoor_temperature_sensor_{nullptr};
   binary_sensor::BinarySensor *clean_filter_binary_sensor_{nullptr};
   text_sensor::TextSensor *firmware_version_text_sensor_{nullptr};
