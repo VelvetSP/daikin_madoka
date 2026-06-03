@@ -234,6 +234,8 @@ void Madoka::update() {
   // configured; each query is a BLE round-trip plus a blocking delay, so
   // skipping the unused ones keeps every poll shorter.
   if (this->clean_filter_binary_sensor_ != nullptr) {
+    // Empty-args request {0x00,0x00}: fn 0x0100 returns the 0x62 object regardless of args
+    // (matches openHAB GetCleanFilterIndicatorCommand, which sends no args). Response arg 0x62 parsed below.
     this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
   }
   if (this->firmware_version_text_sensor_ != nullptr) {
@@ -259,7 +261,13 @@ void Madoka::reset_filter() {
   if (this->node_state != espbt::ClientState::ESTABLISHED) {
     return;
   }
-  this->query_(CMD_RESET_FILTER, std::vector<uint8_t>{0x51, 0x01, 0x01, 0xFE, 0x01, 0x01}, 200);
+  // A proper "filter cleaned" reset needs TWO actions; openHAB DaikinMadokaHandler.resetCleanFilterIndicator()
+  // issues them as two distinct command/response cycles, not one frame:
+  //   DisableCleanFilterIndicator (0x51) then ResetCleanFilterTimer (0xFE).
+  // We mirror that validated sequence. The combined {0x51,..,0xFE,..} frame this replaced may also work
+  // (SetSetpoint above sends a multi-TLV frame fine), but no validated implementation sends a combined 0x4220.
+  this->query_(CMD_RESET_FILTER, std::vector<uint8_t>{0x51, 0x01, 0x01}, 200);  // DisableCleanFilterIndicator
+  this->query_(CMD_RESET_FILTER, std::vector<uint8_t>{0xFE, 0x01, 0x01}, 200);  // ResetCleanFilterTimer
   if (this->clean_filter_binary_sensor_ != nullptr) {
     this->clean_filter_binary_sensor_->publish_state(false);
   }
