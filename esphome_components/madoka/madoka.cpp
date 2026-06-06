@@ -198,6 +198,7 @@ void Madoka::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       this->current_temperature = NAN;
       this->target_temperature = NAN;
       this->version_known_ = false;  // PER-92: re-read the static version once on the next connection
+      this->pending_chunks_.clear();  // PER-87: drop any half-reassembled message from the dropped link
       this->publish_state();
       break;
     }
@@ -302,10 +303,28 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
     ESP_LOGI(TAG, "Chunk discarded: invalid length.");
     return;
   }
+  // PER-87: bounded recovery. If a multi-chunk reassembly has been sitting incomplete longer
+  // than REASSEMBLY_TIMEOUT_MS (a lost middle or zeroth chunk on a degraded link would
+  // otherwise wedge the buffer until the next message's chunk 0), discard the stale fragment
+  // before processing this chunk so it cannot corrupt the next reassembly.
+  if (!this->pending_chunks_.empty() && (millis() - this->pending_since_ms_) > REASSEMBLY_TIMEOUT_MS) {
+    ESP_LOGW(TAG, "Reassembly buffer timed out with %u chunk(s); discarding.",
+             (unsigned) this->pending_chunks_.size());
+    this->pending_chunks_.clear();
+  }
   uint8_t chunk_id = chk[0];
   std::vector<uint8_t> stripped{chk.begin() + 1, chk.end()};
   if (chunk_id == 0 && validate_buffer(stripped)) {
+    // A complete single-chunk message: parse it without touching pending_chunks_, so an
+    // in-flight multi-chunk reassembly survives a single-chunk reply interleaved into it.
     this->parse_cb_(stripped);
+    return;
+  }
+  // PER-87: reject an out-of-range chunk id. A real multi-chunk reply is only a few chunks; a
+  // doubled/oversized reply on a bad link can present a garbage index that would otherwise
+  // bloat pending_chunks_ and skew the contiguity check below.
+  if (chunk_id >= MAX_REASSEMBLY_CHUNKS) {
+    ESP_LOGW(TAG, "Chunk id %u out of range; discarding.", chunk_id);
     return;
   }
   if (this->pending_chunks_.count(chunk_id)) {
@@ -318,6 +337,9 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
       ESP_LOGD(TAG, "Chunk ID: %d.", chunk_id);
       return;
     }
+  }
+  if (this->pending_chunks_.empty()) {
+    this->pending_since_ms_ = millis();  // PER-87: start the reassembly clock for the timeout above
   }
   this->pending_chunks_[chunk_id] = chk;
 
