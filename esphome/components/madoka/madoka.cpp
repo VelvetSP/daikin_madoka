@@ -181,6 +181,7 @@ void Madoka::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       this->node_state = espbt::ClientState::IDLE;  // ??
       this->current_temperature = NAN;
       this->target_temperature = NAN;
+      this->version_known_ = false;  // PER-92: re-read the static version once on the next connection
       this->publish_state();
       break;
     }
@@ -238,7 +239,11 @@ void Madoka::update() {
     // (matches openHAB GetCleanFilterIndicatorCommand, which sends no args). Response arg 0x62 parsed below.
     this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
   }
-  if (this->firmware_version_text_sensor_ != nullptr) {
+  // PER-92: the firmware version is static; fetch it once per connection rather than
+  // re-polling the large multi-chunk 0x0130 frame every cycle (it is the frame most
+  // likely to trip reassembly on a degraded link). version_known_ latches on the first
+  // successful parse and resets on disconnect.
+  if (this->firmware_version_text_sensor_ != nullptr && !this->version_known_) {
     this->query_(CMD_GET_VERSION, std::vector<uint8_t>{0x00, 0x00}, 50);
   }
   if (this->eye_brightness_number_ != nullptr) {
@@ -555,10 +560,13 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       if (this->firmware_version_text_sensor_ != nullptr) {
         if (!rc_version.empty() && !ble_version.empty()) {
           this->firmware_version_text_sensor_->publish_state("RC " + rc_version + " / BLE " + ble_version);
+          this->version_known_ = true;  // PER-92: cached; skip the 0x0130 poll in subsequent cycles
         } else if (!rc_version.empty()) {
           this->firmware_version_text_sensor_->publish_state(rc_version);
+          this->version_known_ = true;  // PER-92
         } else if (!ble_version.empty()) {
           this->firmware_version_text_sensor_->publish_state("BLE " + ble_version);
+          this->version_known_ = true;  // PER-92
         }
       }
       break;

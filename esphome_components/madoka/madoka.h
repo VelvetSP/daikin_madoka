@@ -21,6 +21,15 @@
 
 static const uint8_t MAX_CHUNK_SIZE = 20;
 static const uint8_t BLE_SEND_MAX_RETRIES = 5;
+// PER-87: reassembly hardening. A legitimate multi-chunk reply is at most ~14 chunks
+// (255-byte max frame / 19 data bytes per chunk); a chunk id beyond this is corruption
+// from a doubled/oversized reply on a degraded link, not data.
+static const uint8_t MAX_REASSEMBLY_CHUNKS = 16;
+// PER-87: drop a partial reassembly that has stayed incomplete longer than this many ms
+// (backstop for a lost middle/zeroth chunk that would otherwise wedge the buffer). All
+// chunks of one real reply arrive within tens of ms, so this is a generous dead-message
+// threshold well under the typical 15 s poll interval.
+static const uint32_t REASSEMBLY_TIMEOUT_MS = 3000;
 
 namespace esphome {
 namespace madoka {
@@ -78,6 +87,15 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
   // cur_status_.mode is its uninitialised default (0 == FAN_ONLY), so on a flaky link that
   // never delivers the operation-mode reply we must NOT republish a mode from it (PER-85).
   bool op_mode_known_ = false;
+  // True once a CMD_GET_VERSION (0x0130) reply has been parsed. The firmware version is
+  // static, so we fetch it once per connection instead of polling the large multi-chunk
+  // 0x0130 frame every update cycle — that frame is the one most likely to trip reassembly
+  // on a degraded link, for zero benefit. Reset on disconnect so a reconnect re-reads (PER-92).
+  bool version_known_ = false;
+  // millis() timestamp of when the current reassembly buffer received its first chunk, used
+  // for the bounded-recovery timeout: a lost middle/zeroth chunk on a degraded link would
+  // otherwise wedge the buffer until the next message's chunk 0 (PER-87).
+  uint32_t pending_since_ms_ = 0;
   sensor::Sensor *outdoor_temperature_sensor_{nullptr};
   binary_sensor::BinarySensor *clean_filter_binary_sensor_{nullptr};
   text_sensor::TextSensor *firmware_version_text_sensor_{nullptr};
