@@ -101,6 +101,22 @@ void Madoka::control(const ClimateCall &call) {
       this->query_(CMD_SET_OPERATION_MODE, std::vector<uint8_t>{0x20, 0x01, (uint8_t) mode_out}, 600);
     }
     this->query_(CMD_SET_SETTING_STATUS, std::vector<uint8_t>{0x20, 0x01, (uint8_t) status_out}, 200);
+    // PER-88: optimistically reflect the just-issued mode locally so HA updates immediately
+    // instead of waiting for the next poll's CMD_GET_OPERATION_MODE readback, which a flaky
+    // link can drop. The next poll still reconciles against the device. A user-initiated set
+    // is itself a known mode, so it satisfies PER-85's op_mode_known_ guard. mode_out already
+    // is the device mode byte parse_cb_() maps back from, so cur_status_ stays consistent.
+    if (mode == climate::CLIMATE_MODE_OFF) {
+      this->cur_status_.status = false;
+      this->mode = climate::CLIMATE_MODE_OFF;
+      this->publish_state();
+    } else if (mode_out != 255) {
+      this->cur_status_.status = true;
+      this->cur_status_.mode = mode_out;
+      this->op_mode_known_ = true;
+      this->mode = mode;
+      this->publish_state();
+    }
   }
   if (call.get_target_temperature().has_value()) {
     // Single target temperature: write the same value to both the cooling
