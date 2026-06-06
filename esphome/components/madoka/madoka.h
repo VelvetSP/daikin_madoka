@@ -104,7 +104,7 @@ class Madoka : public climate::Climate, public esphome::ble_client::BLEClientNod
 
   std::vector<std::vector<uint8_t>> split_payload_(std::vector<uint8_t> msg);
   std::vector<uint8_t> prepare_message_(uint16_t cmd, std::vector<uint8_t> args);
-  void query_(uint16_t cmd, std::vector<uint8_t> args, int t_d);
+  bool query_(uint16_t cmd, std::vector<uint8_t> args, int t_d);
   void parse_cb_(std::vector<uint8_t> msg);
   void process_incoming_chunk_(std::vector<uint8_t> chk);
 
