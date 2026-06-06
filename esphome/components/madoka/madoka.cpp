@@ -206,7 +206,10 @@ void Madoka::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       this->current_temperature = NAN;
       this->target_temperature = NAN;
       this->version_known_ = false;  // PER-92: re-read the static version once on the next connection
-      this->pending_chunks_.clear();  // PER-87: drop any half-reassembled message from the dropped link
+      // PER-87: do NOT touch pending_chunks_ here — this handler runs on the BLE event task while
+      // process_incoming_chunk_ mutates the map on the loop task; clearing it cross-thread races
+      // (iterator invalidation / corruption). A stale buffer after reconnect is dropped on the loop
+      // thread by the reassembly timeout or the next chunk-0, so no cross-thread reset is needed.
       this->publish_state();
       break;
     }
@@ -425,7 +428,10 @@ bool Madoka::query_(uint16_t cmd, std::vector<uint8_t> args, int t_d) {
     }
   }
   esphome::delay(t_d);
-  return true;
+  // PER-88: a BLE disconnect during the post-write delay is handled on the BLE event task and
+  // flips node_state to IDLE. Don't report success for a link that dropped mid-command — that
+  // would let control() publish an optimistic mode the device never actually received.
+  return this->node_state == espbt::ClientState::ESTABLISHED;
 }
 
 void Madoka::parse_cb_(std::vector<uint8_t> msg) {
