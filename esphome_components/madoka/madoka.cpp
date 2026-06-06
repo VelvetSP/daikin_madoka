@@ -97,10 +97,34 @@ void Madoka::control(const ClimateCall &call) {
         break;
     }
     ESP_LOGD(TAG, "status: %d, mode: %d", status_out, mode_out);
+    bool op_set_ok = true;
     if (mode_out != 255) {
-      this->query_(CMD_SET_OPERATION_MODE, std::vector<uint8_t>{0x20, 0x01, (uint8_t) mode_out}, 600);
+      op_set_ok = this->query_(CMD_SET_OPERATION_MODE, std::vector<uint8_t>{0x20, 0x01, (uint8_t) mode_out}, 600);
     }
-    this->query_(CMD_SET_SETTING_STATUS, std::vector<uint8_t>{0x20, 0x01, (uint8_t) status_out}, 200);
+    bool status_set_ok = this->query_(CMD_SET_SETTING_STATUS, std::vector<uint8_t>{0x20, 0x01, (uint8_t) status_out}, 200);
+    // PER-88: optimistically reflect the just-issued mode locally so HA updates immediately
+    // instead of waiting for the next poll's CMD_GET_OPERATION_MODE readback, which a flaky
+    // link can drop. The next poll still reconciles against the device. A user-initiated set
+    // is itself a known mode, so it satisfies PER-85's op_mode_known_ guard. mode_out already
+    // is the device mode byte parse_cb_() maps back from, so cur_status_ stays consistent.
+    // Gate on write success: query_() returns false when the BLE write failed after retries.
+    // On a flaky link a failed write must NOT publish a mode that never reached the device —
+    // that is exactly the confidently-wrong state PER-85 set out to avoid.
+    if (mode == climate::CLIMATE_MODE_OFF) {
+      if (status_set_ok) {
+        this->cur_status_.status = false;
+        this->mode = climate::CLIMATE_MODE_OFF;
+        this->publish_state();
+      }
+    } else if (mode_out != 255) {
+      if (op_set_ok && status_set_ok) {
+        this->cur_status_.status = true;
+        this->cur_status_.mode = mode_out;
+        this->op_mode_known_ = true;
+        this->mode = mode;
+        this->publish_state();
+      }
+    }
   }
   if (call.get_target_temperature().has_value()) {
     // Single target temperature: write the same value to both the cooling
@@ -181,6 +205,11 @@ void Madoka::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc
       this->node_state = espbt::ClientState::IDLE;  // ??
       this->current_temperature = NAN;
       this->target_temperature = NAN;
+      this->version_known_ = false;  // PER-92: re-read the static version once on the next connection
+      // PER-87: do NOT touch pending_chunks_ here — this handler runs on the BLE event task while
+      // process_incoming_chunk_ mutates the map on the loop task; clearing it cross-thread races
+      // (iterator invalidation / corruption). A stale buffer after reconnect is dropped on the loop
+      // thread by the reassembly timeout or the next chunk-0, so no cross-thread reset is needed.
       this->publish_state();
       break;
     }
@@ -238,7 +267,11 @@ void Madoka::update() {
     // (matches openHAB GetCleanFilterIndicatorCommand, which sends no args). Response arg 0x62 parsed below.
     this->query_(CMD_GET_CLEAN_FILTER, std::vector<uint8_t>{0x00, 0x00}, 50);
   }
-  if (this->firmware_version_text_sensor_ != nullptr) {
+  // PER-92: the firmware version is static; fetch it once per connection rather than
+  // re-polling the large multi-chunk 0x0130 frame every cycle (it is the frame most
+  // likely to trip reassembly on a degraded link). version_known_ latches on the first
+  // successful parse and resets on disconnect.
+  if (this->firmware_version_text_sensor_ != nullptr && !this->version_known_) {
     this->query_(CMD_GET_VERSION, std::vector<uint8_t>{0x00, 0x00}, 50);
   }
   if (this->eye_brightness_number_ != nullptr) {
@@ -281,10 +314,28 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
     ESP_LOGI(TAG, "Chunk discarded: invalid length.");
     return;
   }
+  // PER-87: bounded recovery. If a multi-chunk reassembly has been sitting incomplete longer
+  // than REASSEMBLY_TIMEOUT_MS (a lost middle or zeroth chunk on a degraded link would
+  // otherwise wedge the buffer until the next message's chunk 0), discard the stale fragment
+  // before processing this chunk so it cannot corrupt the next reassembly.
+  if (!this->pending_chunks_.empty() && (millis() - this->pending_since_ms_) > REASSEMBLY_TIMEOUT_MS) {
+    ESP_LOGW(TAG, "Reassembly buffer timed out with %u chunk(s); discarding.",
+             (unsigned) this->pending_chunks_.size());
+    this->pending_chunks_.clear();
+  }
   uint8_t chunk_id = chk[0];
   std::vector<uint8_t> stripped{chk.begin() + 1, chk.end()};
   if (chunk_id == 0 && validate_buffer(stripped)) {
+    // A complete single-chunk message: parse it without touching pending_chunks_, so an
+    // in-flight multi-chunk reassembly survives a single-chunk reply interleaved into it.
     this->parse_cb_(stripped);
+    return;
+  }
+  // PER-87: reject an out-of-range chunk id. A real multi-chunk reply is only a few chunks; a
+  // doubled/oversized reply on a bad link can present a garbage index that would otherwise
+  // bloat pending_chunks_ and skew the contiguity check below.
+  if (chunk_id >= MAX_REASSEMBLY_CHUNKS) {
+    ESP_LOGW(TAG, "Chunk id %u out of range; discarding.", chunk_id);
     return;
   }
   if (this->pending_chunks_.count(chunk_id)) {
@@ -297,6 +348,17 @@ void Madoka::process_incoming_chunk_(std::vector<uint8_t> chk) {
       ESP_LOGD(TAG, "Chunk ID: %d.", chunk_id);
       return;
     }
+  }
+  if (this->pending_chunks_.empty()) {
+    if (chunk_id != 0) {
+      // PER-87: never seed a reassembly on a non-zero chunk. Its chunk 0 was lost, or it is a
+      // late straggler from a timed-out/cleared frame; storing it as the buffer's first chunk
+      // would let a later fresh chunk 0 concatenate with this stale tail and spuriously pass
+      // validate_buffer(). A frame can only legitimately begin at chunk 0.
+      ESP_LOGW(TAG, "Discarding orphan chunk_id=%u (no chunk 0 to anchor reassembly).", chunk_id);
+      return;
+    }
+    this->pending_since_ms_ = millis();  // PER-87: start the reassembly clock for the timeout above
   }
   this->pending_chunks_[chunk_id] = chk;
 
@@ -341,11 +403,11 @@ std::vector<uint8_t> Madoka::prepare_message_(uint16_t cmd, std::vector<uint8_t>
   return result;
 }
 
-void Madoka::query_(uint16_t cmd, std::vector<uint8_t> args, int t_d) {
+bool Madoka::query_(uint16_t cmd, std::vector<uint8_t> args, int t_d) {
   std::vector<uint8_t> payload = this->prepare_message_(cmd, std::move(args));
 
   if (this->node_state != espbt::ClientState::ESTABLISHED) {
-    return;
+    return false;
   }
   std::vector<std::vector<uint8_t>> chunks = this->split_payload_(payload);
 
@@ -362,10 +424,14 @@ void Madoka::query_(uint16_t cmd, std::vector<uint8_t> args, int t_d) {
     }
     if (status) {
       ESP_LOGE(TAG, "[%s] Command could not be sent, last status=%d", this->parent_->address_str(), status);
-      return;
+      return false;
     }
   }
   esphome::delay(t_d);
+  // PER-88: a BLE disconnect during the post-write delay is handled on the BLE event task and
+  // flips node_state to IDLE. Don't report success for a link that dropped mid-command — that
+  // would let control() publish an optimistic mode the device never actually received.
+  return this->node_state == espbt::ClientState::ESTABLISHED;
 }
 
 void Madoka::parse_cb_(std::vector<uint8_t> msg) {
@@ -555,10 +621,13 @@ void Madoka::parse_cb_(std::vector<uint8_t> msg) {
       if (this->firmware_version_text_sensor_ != nullptr) {
         if (!rc_version.empty() && !ble_version.empty()) {
           this->firmware_version_text_sensor_->publish_state("RC " + rc_version + " / BLE " + ble_version);
+          this->version_known_ = true;  // PER-92: cached; skip the 0x0130 poll in subsequent cycles
         } else if (!rc_version.empty()) {
           this->firmware_version_text_sensor_->publish_state(rc_version);
+          this->version_known_ = true;  // PER-92
         } else if (!ble_version.empty()) {
           this->firmware_version_text_sensor_->publish_state("BLE " + ble_version);
+          this->version_known_ = true;  // PER-92
         }
       }
       break;
